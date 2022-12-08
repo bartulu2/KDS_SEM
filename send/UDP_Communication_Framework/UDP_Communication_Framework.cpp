@@ -24,6 +24,7 @@
 #endif // RECEIVER
 
 
+
 void InitWinsock()
 {
 	WSADATA wsaData;
@@ -57,7 +58,14 @@ int main()
 	char buffer_tx[BUFFERS_LEN];
 
 #ifdef SENDER
-	
+	// ID=1 NAME
+	// ID=2 SIZE
+	// ID=3 START
+	// ID=4 DATA
+	// ID=5 STOP
+	//
+	//
+	//
 	sockaddr_in addrDest;
 	FILE* fptr;
 	addrDest.sin_family = AF_INET;
@@ -65,7 +73,7 @@ int main()
 	InetPton(AF_INET, _T(TARGET_IP), &addrDest.sin_addr.s_addr);
 	char name[] = "..\\headlol.png";
 	printf("%s\n", name);
-	if ((fptr = fopen(name, "rb")) == NULL) {
+	if ((fptr = fopen(name, "rb+")) == NULL) {
 		printf("Error! opening file");
 
 		// Program exits if the file pointer returns NULL.
@@ -74,10 +82,9 @@ int main()
 	printf("Opened file succesfully\n");
 	char src[50];
 	char fur[50];
-	strcpy(src, "NAME=");
-	strcpy(fur, "head.png");
+	snprintf(src,50,"ID=%d|%s",1,"head.png");
 	//SEND NAME=filename + type
-	strncpy(buffer_tx, strcat(src,fur), BUFFERS_LEN);
+	strncpy(buffer_tx, src, BUFFERS_LEN);
 	printf("Sending file name %s\n",src);
 	//printf("Buffer is %s\n", buffer_tx);
 	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
@@ -87,12 +94,12 @@ int main()
 	
 	fseek(fptr, 0L, SEEK_END);
 	char buffer[100];
-	long int res = ftell(fptr);
+	long int res = ftell(fptr)/sizeof(char);
 	fseek(fptr, 0L, SEEK_SET);
-	int f_size = snprintf(buffer, 100, "SIZE=%d", res);
+	int f_size = snprintf(buffer, 100, "ID=%d|%d", 2,res);
 
 	strncpy(buffer_tx, buffer , BUFFERS_LEN);
-	printf("Sending file size %s\n",buffer);
+	printf("Sending file size %sB\n",buffer);
 	//printf("Buffer is %s\n", buffer_tx);
 	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
 	memset(buffer_tx, 0, sizeof buffer_tx);
@@ -100,7 +107,7 @@ int main()
 	//SEND START
 	
 	char start[10];
-	strcpy(start, "START");
+	snprintf(start, 10, "ID=%d", 3);
 	strncpy(buffer_tx,start, BUFFERS_LEN);
 	//printf("Buffer is %s\n", buffer_tx);
 	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
@@ -109,42 +116,42 @@ int main()
 	
 	//START SENDING FILE DATA
 
-	char data_buffer[30*32];
+	char data_buffer[1000*sizeof(char)];
 	char packet_buffer[1024];
-	char numbits[15];
-	char header[23];
+	char numbits[8];
+	char header[25];
 	long data_pointer = 0;
+	long bytes_sent = 0;
 	bool cont = true;
+	int epoch = 5;
 	memset(packet_buffer, 0x00, sizeof packet_buffer);
 	memset(data_buffer, 0x00, sizeof data_buffer);
 	while (cont) {
-		int bytes_read = fread(data_buffer,sizeof(int), 32, fptr);
-		strcpy(header, "DATA=");
-		snprintf(numbits, 20, "%d", data_pointer);
+		int bytes_read = fread(data_buffer,sizeof(char), 1*sizeof(char), fptr);
+		snprintf(header, 23, "ID=%d|", 4);
+
+		snprintf(numbits, 20, "%d", bytes_read);
 		
 		strcat(header, numbits);
 		strcat(header, "|");
 		strcat(packet_buffer, header);
-		printf("%d, %d\n",strlen(packet_buffer),strlen(data_buffer));
 		strcat(packet_buffer, data_buffer);
 		
-		data_pointer = data_pointer + bytes_read*sizeof(int);
+		
 		sendto(socketS, packet_buffer, strlen(packet_buffer), 0, (sockaddr*)&addrDest, sizeof(addrDest));
-		printf("Sending DATA starting at %d, of length %d, with data %s\n",data_pointer,bytes_read);
+		//printf("Sending DATA %s, read %d bytes\n",data_buffer,bytes_read);
+		bytes_sent += bytes_read;
 		memset(data_buffer, 0x00, sizeof data_buffer);
 		memset(packet_buffer, 0x00, sizeof packet_buffer);
 		memset(header, 0x00, sizeof header);
 		memset(numbits, 0x00, sizeof numbits);
-		printf("%d, %d\n", strlen(packet_buffer), strlen(data_buffer));
 		if (bytes_read == 0){
 			cont = false;
 		}
+		epoch -= 1;
 	}
 	//SEND STOP TO FINISH
-	
-	strncpy(buffer_tx, "Hello world payload!\n", BUFFERS_LEN); //put some data to buffer
-	
-	printf("Sending packet.\n");
+	printf("Sent total of %ldB", bytes_sent);
 		
 
 	closesocket(socketS);

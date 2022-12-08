@@ -4,11 +4,13 @@
 //
 
 #pragma once
+//#pragma comment(lib, "libcrc.h")
 
 #include "targetver.h"
 
 #include <stdio.h>
 #include <tchar.h>
+//#include <libcrc.h>
 
 
 
