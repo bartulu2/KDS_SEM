@@ -5,7 +5,7 @@
 #include "stdafx.h"
 #include <winsock2.h>
 #include "ws2tcpip.h"
-
+#include <string.h>
 #define TARGET_IP	"127.0.0.1"
 
 #define BUFFERS_LEN 1024
@@ -45,7 +45,6 @@ int main()
 	local.sin_port = htons(LOCAL_PORT);
 	local.sin_addr.s_addr = INADDR_ANY;
 
-
 	socketS = socket(AF_INET, SOCK_DGRAM, 0);
 	if (bind(socketS, (sockaddr*)&local, sizeof(local)) != 0){
 		printf("Binding error!\n");
@@ -74,16 +73,58 @@ int main()
 
 #ifdef RECEIVER
 
-	strncpy(buffer_rx, "No data received.\n", BUFFERS_LEN);
+	//strncpy(buffer_rx, "No data received.\n", BUFFERS_LEN);
+	memset(buffer_rx, 0x00, sizeof buffer_rx);
 	printf("Waiting for datagram ...\n");
-	if(recvfrom(socketS, buffer_rx, sizeof(buffer_rx), 0, (sockaddr*)&from, &fromlen) == SOCKET_ERROR){
-		printf("Socket error!\n");
-		getchar();
-		return 1;
-	}
-	else
-		printf("Datagram: %s", buffer_rx);
+	char fname[100];
+	char f_data;
+	FILE* fptr;
+	memset(fname, 0x00, sizeof fname);
+	while (1) {
+		if (recvfrom(socketS, buffer_rx, sizeof(buffer_rx), 0, (sockaddr*)&from, &fromlen) == SOCKET_ERROR) {
+			printf("Socket error!\n");
+			getchar();
+			return 1;
+		}
+		else {
+		
+		}
 
+			printf("Received: %s\n", buffer_rx);
+
+		
+		char *pointer;
+		//Fetch name of file
+		if (strstr(buffer_rx,"NAME=") != NULL) {
+			pointer = strstr(buffer_rx, "NAME=");
+			pointer = pointer + 5 * sizeof(char);
+			strcpy(fname, pointer);
+			printf(pointer);
+			
+		}
+		//Fetch size of file
+		else if (strstr(buffer_rx, "SIZE")!=NULL){
+			pointer = strstr(buffer_rx, "SIZE=");
+			char* ptr;
+			pointer = pointer + 5 * sizeof(char);
+			long data_size = strtol(pointer, &ptr, 10);
+			
+			printf("%ld", data_size);
+		}
+		//Fetch data
+		else if (strstr(buffer_rx, "DATA=")) {
+			pointer = strstr(buffer_rx, "DATA=");
+		}	char amount[10];
+			pointer = pointer + 5 * sizeof(char);
+			fptr = fopen(fname, "wb");
+			while (pointer[0]!='|') {
+				strcat(amount, &pointer[0]);
+			}
+			char* data_ptr;
+			int amount_of_data = strtol(amount, NULL, 10);
+			int ret = fwrite(data_ptr, sizeof(int), amount_of_data * sizeof(int), fptr);
+			memset(buffer_rx, 0, sizeof buffer_rx);
+	}
 	closesocket(socketS);
 #endif
 	//**********************************************************************
