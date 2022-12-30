@@ -6,22 +6,14 @@
 #include <winsock2.h>
 #include "ws2tcpip.h"
 #include <string.h>
+#include "src/crc16.c"
+
 #define TARGET_IP	"127.0.0.1"
 
 #define BUFFERS_LEN 1024
 
-//#define SENDER
-#define RECEIVER
-
-#ifdef SENDER
-#define TARGET_PORT 5555
-#define LOCAL_PORT 8888
-#endif // SENDER
-
-#ifdef RECEIVER
 #define TARGET_PORT 8888
 #define LOCAL_PORT 5555
-#endif // RECEIVER
 
 
 void InitWinsock()
@@ -29,6 +21,15 @@ void InitWinsock()
 	WSADATA wsaData;
 	WSAStartup(MAKEWORD(2, 2), &wsaData);
 }
+
+void send_ack(SOCKET socket,char *buffer_tx, sockaddr_in addrDest) {
+	char ack[10];
+	snprintf(ack, 10, "ACK");
+	strncpy(buffer_tx, ack, BUFFERS_LEN);
+	sendto(socket, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
+	printf("ACK SEND\n");
+}
+
 
 //**********************************************************************
 int main()
@@ -52,118 +53,193 @@ int main()
 		return 1;
 	}
 	//**********************************************************************
-	char buffer_rx[BUFFERS_LEN];
-	char buffer_tx[BUFFERS_LEN];
+	char buffer_rx[BUFFERS_LEN+16];
+	char buffer_tx[BUFFERS_LEN+16];
 
-#ifdef SENDER
-	
 	sockaddr_in addrDest;
 	addrDest.sin_family = AF_INET;
 	addrDest.sin_port = htons(TARGET_PORT);
-	InetPton(AF_INET, _T(TARGET_IP), &addrDest.sin_addr.s_addr);
 
-	
-	strncpy(buffer_tx, "Hello world payload!\n", BUFFERS_LEN); //put some data to buffer
-	printf("Sending packet.\n");
-	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));	
-
-	closesocket(socketS);
-
-#endif // SENDER
-
-#ifdef RECEIVER
 
 	//strncpy(buffer_rx, "No data received.\n", BUFFERS_LEN);
 	memset(buffer_rx, 0x00, sizeof buffer_rx);
 	printf("Waiting for datagram ...\n");
 	char fname[100];
+	char crc_str[16];
+	int crc = 0;
 	char *f_data = NULL;
-	long current_index = 0;
 	FILE* fptr;
 	int index = 0;
 	long data_size = 0;
+	char size_str[100];
+	int total_read = 0;
+	int read_amount = 0;
+	bool com_started = false;
+	char msg_type = '0';
+	int msg_len = 0;
 	memset(fname, 0x00, sizeof fname);
 	while (1) {
 		if (recvfrom(socketS, buffer_rx, sizeof(buffer_rx), 0, (sockaddr*)&from, &fromlen) == SOCKET_ERROR) {
-			printf("Socket error!\n");
+			printf("Socket error! %d\n", WSAGetLastError());
 			getchar();
-			return 1;
+		}
+		else { msg_type = buffer_rx[3]; }
+		char *pointer = NULL;
+
+		// Waits for start msg
+		if (com_started != true && msg_type != '1') {
+			printf("Recieved msg without start\n");
+			continue;
 		}
 		else {
-			//printf("Received: %s\n", buffer_rx);
+			
 		}
-		char *pointer = NULL;
-		//Fetch name of file
-		if (strstr(buffer_rx,"ID=1") != NULL) {
+
+		//Fetch start msg
+		if (msg_type == '1') {
+			com_started = true;
 			pointer = strstr(buffer_rx, "ID=1");
-			pointer = pointer + 5 * sizeof(char);
-			strcpy(fname, pointer);
-		}
-		//Fetch size of file and allocate memory
-		else if (strstr(buffer_rx, "ID=2")!=NULL){
-			printf("DEBUG:SIZE SAVING\n");
-			pointer = strstr(buffer_rx, "ID=2");
-			char* ptr;
-			char* num_size =(char*) calloc(10, sizeof(char));
-			int i = 0;
 			pointer += 5 * sizeof(char);
+			msg_len = 4;
+
+			for (int i = 0; i < 16;i++){
+				crc_str[i] = pointer[i];
+			}
+			crc = strtol(crc_str, NULL, 10);
+			printf("COM STARTED\n");
+		}	
+
+		//Fetch name of file
+		if (msg_type == '2') {
+			pointer = strstr(buffer_rx, "ID=2");
+			pointer += 5 * sizeof(char);
+			msg_len += 4;
+
+			int i = 0;
+			while (pointer[0] != '|') {
+				fname[i] = pointer[0];
+				i++;
+				pointer += sizeof(char);
+			}
+			msg_len += i+1;
+			printf("FILENAME: %s\n", fname);
 			
-			//printf("ALLOCATED MEMORY, POINTER IS %s\n", pointer);		
-			
-			data_size = strtol(pointer, &ptr, 10);
+			pointer += sizeof(char);
+			for (int i = 0; i < 16;i++) {
+				crc_str[i] = pointer[i];
+			}
+			crc = strtol(crc_str, NULL, 10);
+		}
+
+		//Fetch size of file and allocate memory
+		if (msg_type == '3') {
+			printf("BUFFER PRINT NOW %s\n", buffer_rx);
+
+			pointer = strstr(buffer_rx, "ID=3");
+			pointer += 5 * sizeof(char);
+			msg_len += 4;
+
+			int i = 0;
+			while (pointer[0] != '|') {
+				size_str[i] = pointer[0];
+				i++;
+				pointer += sizeof(char);
+			}
+			msg_len += i+1;
+			data_size = strtol(size_str, NULL, 10);
+			printf("DATA_SIZE: %d\n", data_size);
+			pointer += sizeof(char);
+
+			for (i = 0; i < 16;i++) {
+				crc_str[i] = pointer[i];
+			}
+			crc = strtol(crc_str, NULL, 10);
+
 			f_data = (char*)calloc(data_size, sizeof(char));
-			//printf("%d", data_size);
 			memset(f_data, 0x00, data_size * sizeof(char));
 			if (f_data == NULL) {
 				printf("ERROR: cannot allocate memory.\n");
 				exit(1);
 			}
-			free(num_size);
 		}
+
 		//Fetch data and save it to file_buffer
-		else if (strstr(buffer_rx, "ID=4")) {
-			//printf("DEBUG DATA\n");
+		if (msg_type == '4') {
 			pointer = strstr(buffer_rx, "ID=4");
 			char* num_bytes = (char*)calloc(10, sizeof(char));
-			pointer = pointer + 5 * sizeof(char);
+			pointer += 5 * sizeof(char);
+			msg_len += 5;
 			int i = 0;
 			while (pointer[0] != '|') {
 				num_bytes[i] = pointer[0];
 				i++;
 				pointer += sizeof(char);
 			}
+			msg_len += i+1;
 			
-			int read_amount = strtol(num_bytes, NULL, 10);
-			char* data_ptr = (char*)calloc(read_amount, sizeof(char));
-			//printf("READ AMOUNT OF DATA %d\n",read_amount);
+			read_amount = strtol(num_bytes, NULL, 10);
 			pointer += sizeof(char);
-			//printf("Received %d amount, index at %d\n",read_amount,index);
-			for (int i = 0;i < read_amount;i=i+1) {
-				data_ptr[i] = pointer[i];
+			if (read_amount == 1024) {
+				for (int i = 0;i < read_amount - msg_len;i++) {
+					f_data[i + total_read] = pointer[0];
+					pointer++;
+				}
+				msg_len = read_amount - 1;
 			}
-			//printf("Received %s data of size %dB\n", data_ptr,read_amount);
-			for (int i = 0;i < read_amount;i+=1) {
-				//printf("saving %s to index %d\n", &data_ptr[i], index + i);
-				f_data[index+i] = data_ptr[i];
+			else {
+				for (int i = 0;i < read_amount;i++) {
+					f_data[i + total_read] = pointer[0];
+					pointer++;
+				}
+				pointer++;
+				msg_len += read_amount;
+
 			}
-			
-			index += 1;
-			
-			free(num_bytes);
-			free(data_ptr);
+
+			for (i = 0; i < 16;i++) {
+				crc_str[i] = pointer[i];
+			}
+			crc = strtol(crc_str, NULL, 10);
+			total_read += read_amount;
+			index++;
+
+			//Control
+			if (read_amount == 0) {
+				com_started = false;
+			}
+			else {
+				printf("READ AMOUNT: %d, INDEX: %d\n", read_amount, index);
+			}
 		}
-		if (index * sizeof(char) == data_size && data_size!=0 ) {
-			//printf("KONEC, index je %d, velikost souboru je %d\n",index,index*sizeof(char));
-			fptr = fopen(fname, "wb+");
-			//printf("last char is %s", &f_data[index - 2]);
-			int ret = fwrite(f_data, sizeof(char),index*sizeof(char), fptr);
+
+		//CRC control and ACK 
+		char *msg_no_crc = (char *)calloc(msg_len,sizeof(char));
+		for (int i = 0; i < msg_len; i++) {
+			msg_no_crc[i] = buffer_rx[i];
+		}
+		int t = crc_16((unsigned char*)(msg_no_crc), msg_len);
+
+		if (t == crc) {
+			send_ack(socketS, buffer_tx, from);
+		}else{
+			printf("CRC NOT SAME\n");
+		}
+		//printf("CRC I RECIEVED: %d\tCRC I MADE: %d\n", crc, t);
+		free(msg_no_crc);
+		msg_len = 0;
+
+		//Transfer ended
+		if (total_read == data_size && data_size!=0 && read_amount ==0) {
+			printf("KONEC, index je %d, velikost souboru je %d\n",index,data_size);
+			fptr = fopen(fname, "wb");
+			int ret = fwrite(f_data, sizeof(char), total_read, fptr);
 			fclose(fptr);
+			printf("Finished writting in file");
 		}
 		
 		memset(buffer_rx, 0, sizeof buffer_rx);
 	}
 	closesocket(socketS);
-#endif
 	//**********************************************************************
 
 	getchar(); //wait for press Enter
