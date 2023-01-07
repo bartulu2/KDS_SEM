@@ -6,7 +6,7 @@
 #include <winsock2.h>
 #include "ws2tcpip.h"
 #include <string.h>
-#include "src/crc16.c"
+#include "..//..//libcrc-master/src/crc16.c"
 
 #define TARGET_IP	"127.0.0.1"
 
@@ -53,15 +53,14 @@ int main()
 		return 1;
 	}
 	//**********************************************************************
-	char buffer_rx[BUFFERS_LEN+16];
-	char buffer_tx[BUFFERS_LEN+16];
+	char buffer_rx[BUFFERS_LEN];
+	char buffer_tx[BUFFERS_LEN];
 
 	sockaddr_in addrDest;
 	addrDest.sin_family = AF_INET;
 	addrDest.sin_port = htons(TARGET_PORT);
 
 
-	//strncpy(buffer_rx, "No data received.\n", BUFFERS_LEN);
 	memset(buffer_rx, 0x00, sizeof buffer_rx);
 	printf("Waiting for datagram ...\n");
 	char fname[100];
@@ -79,13 +78,15 @@ int main()
 	int msg_len = 0;
 	memset(fname, 0x00, sizeof fname);
 	while (1) {
-		if (recvfrom(socketS, buffer_rx, sizeof(buffer_rx), 0, (sockaddr*)&from, &fromlen) == SOCKET_ERROR) {
+		if (recvfrom(socketS, buffer_rx, 1024, 0, (sockaddr*)&from, &fromlen) == SOCKET_ERROR) {
 			printf("Socket error! %d\n", WSAGetLastError());
 			getchar();
 		}
-		else { msg_type = buffer_rx[3]; }
-		char *pointer = NULL;
 
+		else {
+			msg_type = buffer_rx[3]; }
+		char *pointer = NULL;
+		printf("MSG type %c\n", msg_type);
 		// Waits for start msg
 		if (com_started != true && msg_type != '1') {
 			printf("Recieved msg without start\n");
@@ -133,7 +134,6 @@ int main()
 
 		//Fetch size of file and allocate memory
 		if (msg_type == '3') {
-			printf("BUFFER PRINT NOW %s\n", buffer_rx);
 
 			pointer = strstr(buffer_rx, "ID=3");
 			pointer += 5 * sizeof(char);
@@ -155,7 +155,7 @@ int main()
 			}
 			crc = strtol(crc_str, NULL, 10);
 
-			f_data = (char*)calloc(data_size, sizeof(char));
+			f_data = (char*)calloc(data_size+5, sizeof(char));
 			memset(f_data, 0x00, data_size * sizeof(char));
 			if (f_data == NULL) {
 				printf("ERROR: cannot allocate memory.\n");
@@ -165,6 +165,7 @@ int main()
 
 		//Fetch data and save it to file_buffer
 		if (msg_type == '4') {
+			
 			pointer = strstr(buffer_rx, "ID=4");
 			char* num_bytes = (char*)calloc(10, sizeof(char));
 			pointer += 5 * sizeof(char);
@@ -178,38 +179,27 @@ int main()
 			msg_len += i+1;
 			
 			read_amount = strtol(num_bytes, NULL, 10);
+			char* data_buffer = (char*)calloc(read_amount+2, sizeof(char));
 			pointer += sizeof(char);
-			if (read_amount == 1024) {
-				for (int i = 0;i < read_amount - msg_len;i++) {
+			int bytes_read = 0;
+			for (int i = 0;i < read_amount;i++) {
+					bytes_read++;
 					f_data[i + total_read] = pointer[0];
+					data_buffer[i] = pointer[0];
 					pointer++;
-				}
-				msg_len = read_amount - 1;
+				
 			}
-			else {
-				for (int i = 0;i < read_amount;i++) {
-					f_data[i + total_read] = pointer[0];
-					pointer++;
-				}
-				pointer++;
-				msg_len += read_amount;
-
-			}
-
+			pointer++;
+			msg_len += bytes_read;
 			for (i = 0; i < 16;i++) {
 				crc_str[i] = pointer[i];
 			}
+
 			crc = strtol(crc_str, NULL, 10);
 			total_read += read_amount;
 			index++;
 
-			//Control
-			if (read_amount == 0) {
-				com_started = false;
-			}
-			else {
-				printf("READ AMOUNT: %d, INDEX: %d\n", read_amount, index);
-			}
+			free(data_buffer);
 		}
 
 		//CRC control and ACK 
@@ -218,21 +208,19 @@ int main()
 			msg_no_crc[i] = buffer_rx[i];
 		}
 		int t = crc_16((unsigned char*)(msg_no_crc), msg_len);
-
 		if (t == crc) {
 			send_ack(socketS, buffer_tx, from);
 		}else{
-			printf("CRC NOT SAME\n");
+			
 		}
-		//printf("CRC I RECIEVED: %d\tCRC I MADE: %d\n", crc, t);
 		free(msg_no_crc);
 		msg_len = 0;
-
+		printf("DEBUG: Received: %dB\n",read_amount, total_read, data_size);
 		//Transfer ended
-		if (total_read == data_size && data_size!=0 && read_amount ==0) {
-			printf("KONEC, index je %d, velikost souboru je %d\n",index,data_size);
+		if (total_read >= data_size && data_size!=0 && read_amount ==0) {
+			printf("DEBUG: Finished writing to file\n",index,data_size);
 			fptr = fopen(fname, "wb");
-			int ret = fwrite(f_data, sizeof(char), total_read, fptr);
+			int ret = fwrite(f_data, sizeof(char), data_size, fptr);
 			fclose(fptr);
 			printf("Finished writting in file");
 		}

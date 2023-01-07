@@ -6,7 +6,7 @@
 #include <winsock2.h>
 #include "ws2tcpip.h"
 #include <iostream>
-#include "src/crc16.c"
+#include "..//..//libcrc-master/src/crc16.c"
 
 #define TARGET_IP	"127.0.0.1"
 
@@ -39,16 +39,31 @@ bool recieve_ack(SOCKET socket, char *buffer_rx, sockaddr_in dest ) {
 	}
 }
 
-void add_crc(char* buffer) {
-	int temp = crc_16((unsigned char*)(buffer), strlen(buffer));
-	sprintf(buffer, "%s|%04d", buffer,temp);
+int add_crc(char* buffer,bool isData,int buffer_len) {
+	char* str = (char*)calloc(1, sizeof(int));
+	
+	
+	if (!isData) {
+		int temp = crc_16((unsigned char*)(buffer), strlen(buffer));
+		sprintf(str, "|%d", temp);
+		printf("jojo\n");
+		strcat(buffer, str);
+	}
+	else {
+		int temp = crc_16((unsigned char*)(buffer), buffer_len);
+		sprintf(str, "|%d", temp);
+		for (int i = 0; i < sizeof str;i++) {
+			buffer[buffer_len + i ] = str[i];
+		}
+	}
+	return sizeof str;
 }
 
 
 //**********************************************************************
 int main()
 {
-	char *fname = "text.txt";
+	char *fname = "headlol.png";
 
 	SOCKET socketS;
 
@@ -99,11 +114,14 @@ int main()
 	printf("Opened file succesfully\n");
 
 	//SEND START
+	memset(buffer, 0x00, sizeof buffer);
 	snprintf(buffer, 10, "ID=%d", 1);
-	add_crc(buffer);
-
+	printf("BUFFER IS %s\n", buffer);
+	add_crc(buffer,0,0);
+	printf("BUFFER IS %s\n", buffer);
 	strncpy(buffer_tx, buffer, BUFFERS_LEN);
 	printf("Sending START \n");
+	printf("BUFFER IS %s", buffer_tx);
 	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
 	memset(buffer_tx, 0, sizeof buffer_tx);
 	memset(buffer, 0x00, sizeof buffer);
@@ -117,7 +135,7 @@ int main()
 
 	snprintf(buffer, BUFFERS_LEN, "ID=%d|%s", 2, fname);
 	printf("Sending file name %s\n", fname);
-	add_crc(buffer);
+	add_crc(buffer,0,0);
 	strncpy(buffer_tx, buffer, BUFFERS_LEN);
 	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
 	memset(buffer_tx, 0, sizeof buffer_tx);
@@ -137,7 +155,7 @@ int main()
 	fseek(fptr, 0L, SEEK_SET);
 	int f_size = snprintf(buffer, BUFFERS_LEN, "ID=%d|%d", 3, res);
 	printf("Sending file size %dB\n", res);
-	add_crc(buffer);
+	add_crc(buffer,0,0);
 	strncpy(buffer_tx, buffer, BUFFERS_LEN);
 	//printf("Buffer is %s\n", buffer_tx);
 	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
@@ -154,37 +172,58 @@ int main()
 
 	//START SENDING FILE DATA
 
-	char data_buffer[BUFFERS_LEN];
 	long data_pointer = 0;
 	long bytes_sent = 0;
 	bool cont = true;
+	int iter = 0;
 	while (cont) {
-		int bytes_read = fread(data_buffer, sizeof(char), BUFFERS_LEN * sizeof(char), fptr);
-		snprintf(buffer, BUFFERS_LEN, "ID=%d|%d|%s", 4, bytes_read, data_buffer);
-		add_crc(buffer);
-		strncpy(buffer_tx, buffer, BUFFERS_LEN+16);
+		iter++;
+		char* data_buffer = (char*)calloc(BUFFERS_LEN - 31, sizeof(char));
+		int bytes_read = fread(data_buffer, sizeof(char),992, fptr);
+		int max_index = 0;
+		bool isContinue = true;
 
-		sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
-		printf("Sending DATA, SIZE: %d bytes\n", bytes_read);
+		snprintf(buffer, BUFFERS_LEN, "ID=%d|%d|", 4, bytes_read);
+		int curr_length = 0;
+		while (buffer[curr_length] != 0) {
+			curr_length++;
+		}
+		// WRITE FULL DATA BUFFER TO BUFFER
+		for (int i = 0;i < bytes_read;i++) {
+			buffer[i + curr_length] = data_buffer[i];
+		}
+		int added = add_crc(buffer,true,curr_length+bytes_read);
+		for (int i = 0;i < curr_length+bytes_read+added-1;i++) {
+			buffer_tx[i] = buffer[i];
+		}
+
+		int sent = sendto(socketS, buffer_tx, curr_length+bytes_read+added-2, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+		printf("Sending DATA, SIZE: %d bytes\n", bytes_read, buffer_tx);
+		
 		memset(buffer_tx, 0, sizeof buffer_tx);
 		memset(buffer, 0x00, sizeof buffer);
 
 		if (!recieve_ack(socketS, buffer_rx, addrDest)) {
-			sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
-			printf("Resending DATA, SIZE %d bytes\n", bytes_read);
+			sendto(socketS, buffer_tx, curr_length + bytes_read + added - 2, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+			printf("Resending DATA, SIZE %d bytes\n", max_index);
 			memset(buffer_tx, 0, sizeof buffer_tx);
 			memset(buffer, 0x00, sizeof buffer);
 		}
 
 		bytes_sent += bytes_read;
-		memset(data_buffer, 0x00, sizeof data_buffer);
+		
 		if (bytes_read == 0) {
 			cont = false;
 		}
+		if (iter >2) {
+			//cont = false;
+		}
+		free(data_buffer);
 	}
 	//SEND STOP TO FINISH
-	printf("Sent total of %ldB", bytes_sent);
+	printf("Sent total of %ldB, exiting\n", bytes_sent);
 	fclose(fptr);
 	closesocket(socketS);
+	exit(1);
 }
 
