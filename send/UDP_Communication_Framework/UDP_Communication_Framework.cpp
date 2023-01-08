@@ -6,7 +6,6 @@
 #include <winsock2.h>
 #include "ws2tcpip.h"
 #include <iostream>
-#include "SHA256.h"
 #include "md5.h"
 #include <sstream>
 #include <iostream>
@@ -65,7 +64,7 @@ int add_crc(char* buffer,bool isData,int buffer_len) {
 //**********************************************************************
 int main()
 {
-	char* fname = "plain.txt";
+	char* fname = "headlol.png";
 
 	SOCKET socketS;
 
