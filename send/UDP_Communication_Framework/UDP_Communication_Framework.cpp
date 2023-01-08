@@ -6,6 +6,10 @@
 #include <winsock2.h>
 #include "ws2tcpip.h"
 #include <iostream>
+#include "SHA256.h"
+#include "md5.h"
+#include <sstream>
+#include <iostream>
 #include "..//..//libcrc-master/src/crc16.c"
 
 #define TARGET_IP	"127.0.0.1"
@@ -38,7 +42,6 @@ bool recieve_ack(SOCKET socket, char *buffer_rx, sockaddr_in dest ) {
 		printf("Received ACK\n");
 	}
 }
-
 int add_crc(char* buffer,bool isData,int buffer_len) {
 	char* str = (char*)calloc(1, sizeof(int));
 	
@@ -46,7 +49,6 @@ int add_crc(char* buffer,bool isData,int buffer_len) {
 	if (!isData) {
 		int temp = crc_16((unsigned char*)(buffer), strlen(buffer));
 		sprintf(str, "|%d", temp);
-		printf("jojo\n");
 		strcat(buffer, str);
 	}
 	else {
@@ -63,7 +65,7 @@ int add_crc(char* buffer,bool isData,int buffer_len) {
 //**********************************************************************
 int main()
 {
-	char *fname = "headlol.png";
+	char* fname = "plain.txt";
 
 	SOCKET socketS;
 
@@ -72,7 +74,7 @@ int main()
 	struct sockaddr_in local;
 	struct sockaddr_in from;
 
-	
+
 	local.sin_family = AF_INET;
 	local.sin_port = htons(LOCAL_PORT);
 	local.sin_addr.s_addr = INADDR_ANY;
@@ -81,20 +83,20 @@ int main()
 	socketS = socket(AF_INET, SOCK_DGRAM, 0);
 	if (bind(socketS, (sockaddr*)&local, sizeof(local)) != 0) {
 		printf("Binding error!\n");
-		getchar(); //wait for press Enter
+		getchar(); //wait for pfile_sizes Enter
 		return 1;
 	}
 	//**********************************************************************
-	char buffer_rx[BUFFERS_LEN*2];
-	char buffer_tx[BUFFERS_LEN*2];
-	char buffer[BUFFERS_LEN*2];
+	char buffer_rx[BUFFERS_LEN * 2];
+	char buffer_tx[BUFFERS_LEN * 2];
+	char buffer[BUFFERS_LEN * 2];
 
 	// ID=1 START
 	// ID=2 NAME
 	// ID=3 SIZE
 	// ID=4 DATA
-	// ID=5 STOP
-	//
+	// ID=5 HASH
+	// ID=6 STOP
 	//
 	//
 	sockaddr_in addrDest;
@@ -104,7 +106,11 @@ int main()
 	InetPton(AF_INET, _T(TARGET_IP), &addrDest.sin_addr.s_addr);
 	char name[100] = "..\\";
 	strcat(name, fname);
-	printf("%s\n", name);
+	//sha.update(buaa,1);
+	//uint8_t* digest = sha.digest();
+	//std::cout << SHA256::toString(digest) << std::endl;
+
+	//delete[] digest;
 	if ((fptr = fopen(name, "rb")) == NULL) {
 		printf("Error! opening file");
 
@@ -116,12 +122,9 @@ int main()
 	//SEND START
 	memset(buffer, 0x00, sizeof buffer);
 	snprintf(buffer, 10, "ID=%d", 1);
-	printf("BUFFER IS %s\n", buffer);
-	add_crc(buffer,0,0);
-	printf("BUFFER IS %s\n", buffer);
+	add_crc(buffer, 0, 0);
 	strncpy(buffer_tx, buffer, BUFFERS_LEN);
 	printf("Sending START \n");
-	printf("BUFFER IS %s", buffer_tx);
 	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
 	memset(buffer_tx, 0, sizeof buffer_tx);
 	memset(buffer, 0x00, sizeof buffer);
@@ -135,7 +138,7 @@ int main()
 
 	snprintf(buffer, BUFFERS_LEN, "ID=%d|%s", 2, fname);
 	printf("Sending file name %s\n", fname);
-	add_crc(buffer,0,0);
+	add_crc(buffer, 0, 0);
 	strncpy(buffer_tx, buffer, BUFFERS_LEN);
 	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
 	memset(buffer_tx, 0, sizeof buffer_tx);
@@ -151,11 +154,11 @@ int main()
 	//SEND SIZE OF FILE
 
 	fseek(fptr, 0L, SEEK_END);
-	long int res = ftell(fptr) / sizeof(char);
+	long int file_size = ftell(fptr) / sizeof(char);
 	fseek(fptr, 0L, SEEK_SET);
-	int f_size = snprintf(buffer, BUFFERS_LEN, "ID=%d|%d", 3, res);
-	printf("Sending file size %dB\n", res);
-	add_crc(buffer,0,0);
+	int fake_hotel = snprintf(buffer, BUFFERS_LEN, "ID=%d|%d", 3, file_size);
+	printf("Sending file size %dB\n", file_size);
+	add_crc(buffer, 0, 0);
 	strncpy(buffer_tx, buffer, BUFFERS_LEN);
 	//printf("Buffer is %s\n", buffer_tx);
 	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
@@ -164,7 +167,7 @@ int main()
 
 	if (!recieve_ack(socketS, buffer_rx, addrDest)) {
 		sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
-		printf("Resending file size %dB\n", res);
+		printf("Resending file size %dB\n", file_size);
 		memset(buffer_tx, 0, sizeof buffer_tx);
 		memset(buffer, 0x00, sizeof buffer);
 	}
@@ -179,7 +182,7 @@ int main()
 	while (cont) {
 		iter++;
 		char* data_buffer = (char*)calloc(BUFFERS_LEN - 31, sizeof(char));
-		int bytes_read = fread(data_buffer, sizeof(char),992, fptr);
+		int bytes_read = fread(data_buffer, sizeof(char), 992, fptr);
 		int max_index = 0;
 		bool isContinue = true;
 
@@ -192,14 +195,14 @@ int main()
 		for (int i = 0;i < bytes_read;i++) {
 			buffer[i + curr_length] = data_buffer[i];
 		}
-		int added = add_crc(buffer,true,curr_length+bytes_read);
-		for (int i = 0;i < curr_length+bytes_read+added-1;i++) {
+		int added = add_crc(buffer, true, curr_length + bytes_read);
+		for (int i = 0;i < curr_length + bytes_read + added - 1;i++) {
 			buffer_tx[i] = buffer[i];
 		}
 
-		int sent = sendto(socketS, buffer_tx, curr_length+bytes_read+added-2, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+		int sent = sendto(socketS, buffer_tx, curr_length + bytes_read + added - 2, 0, (sockaddr*)&addrDest, sizeof(addrDest));
 		printf("Sending DATA, SIZE: %d bytes\n", bytes_read, buffer_tx);
-		
+
 		memset(buffer_tx, 0, sizeof buffer_tx);
 		memset(buffer, 0x00, sizeof buffer);
 
@@ -211,18 +214,38 @@ int main()
 		}
 
 		bytes_sent += bytes_read;
-		
+
 		if (bytes_read == 0) {
 			cont = false;
 		}
-		if (iter >2) {
+		if (iter > 2) {
 			//cont = false;
 		}
 		free(data_buffer);
 	}
 	//SEND STOP TO FINISH
-	printf("Sent total of %ldB, exiting\n", bytes_sent);
+	printf("Sent total of %ldB\n", bytes_sent);
 	fclose(fptr);
+	FILE* pepe_file = fopen(name, "rb");
+	char* moje_souborove_pole = (char*)calloc(file_size, sizeof(char));
+	// Pole alokovano
+	int byte_read = fread(moje_souborove_pole, sizeof(char), file_size, pepe_file);
+
+	if (byte_read != file_size) {
+		std::cout << byte_read << " " << file_size << std::endl;
+		printf("Cannot read file to compute hash, bye.\n");
+	}
+	else {
+		std::string hash = md5(std::string(moje_souborove_pole, file_size));
+		snprintf(buffer_tx, BUFFERS_LEN, "ID=%d|%s", 5, hash.c_str());
+		add_crc(buffer_tx, 0, 0);
+		sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
+		std::cout << "DEBUG: Sending hash of: " << hash << std::endl;
+		std::cout << "DEBUG: BUFFER_TX IS " << buffer_tx << std::endl;
+	}
+	free(moje_souborove_pole);
+	fclose(pepe_file);
+	
 	closesocket(socketS);
 	exit(1);
 }
