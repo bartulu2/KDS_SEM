@@ -13,8 +13,10 @@
 
 #define TARGET_IP	"127.0.0.1"
 
-#define TARGET_PORT 14001
-#define LOCAL_PORT 15000
+#define TARGET_PORT 8888
+#define LOCAL_PORT 5555
+
+#define FAULTY_COM TRUE
 
 #define BUFFERS_LEN 1024
 
@@ -49,8 +51,28 @@ void send_ack(SOCKET socket, char* buffer_tx, sockaddr_in addrDest) {
 	snprintf(ack, 10, "ACK");
 	strncpy(buffer_tx, ack, BUFFERS_LEN);
 	add_crc(buffer_tx, 0, 0);
-	sendto(socket, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
-	printf("ACK SEND\n");
+	if (FAULTY_COM) {
+		int fault_error = rand() % 10;
+		int fault_lost = rand() % 15;
+		if (!fault_error) {
+			int faulty_bit_1 = rand() % 3;
+			int faulty_bit_2 = rand() % 3;
+			buffer_tx[faulty_bit_1] = buffer_tx[faulty_bit_2];
+			printf("Faulty ACK send ----- WARNING\n", faulty_bit_1);
+			printf("ACK LOOKS LIKE THIS>>> %s\n", buffer_tx);
+			sendto(socket, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
+		}
+		else if (!fault_lost) {
+			printf("ACK lost ----- WARNING\n");
+		}
+		else {
+			sendto(socket, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
+			printf("ACK SEND\n");
+		}
+	}else{
+		sendto(socket, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
+		printf("ACK SEND\n");
+	}
 }
 
 
@@ -194,6 +216,7 @@ int main()
 
 			pointer = strstr(buffer_rx, "ID=4");
 			char* num_bytes = (char*)calloc(10, sizeof(char));
+			char* num_msg = (char*)calloc(10, sizeof(char));
 			pointer += 5 * sizeof(char);
 			msg_len = 5;
 			int i = 0;
@@ -204,9 +227,24 @@ int main()
 			}
 			msg_len += i + 1;
 
-			read_amount = strtol(num_bytes, NULL, 10);
+			read_amount = atoi(num_bytes);
 			char* data_buffer = (char*)calloc(read_amount + 2, sizeof(char));
 			pointer += sizeof(char);
+
+			i = 0;
+			while (pointer[0] != '|') {
+				num_msg[i] = pointer[0];
+				i++;
+				pointer += sizeof(char);
+			}
+			msg_len += i + 1;
+			pointer++;
+
+			int msg_num = atoi(num_msg);	
+			if (msg_num != (index - 2)) {
+				send_ack(socketS, buffer_tx, from);
+				continue;
+			}
 			int bytes_read = 0;
 			for (int i = 0;i < read_amount;i++) {
 				bytes_read++;
@@ -220,19 +258,10 @@ int main()
 			for (i = 0; i < 16;i++) {
 				crc_str[i] = pointer[i];
 			}
-
 			crc = strtol(crc_str, NULL, 10);
-			total_read += read_amount;
-			index++;
-			printf("DEBUG: Received: %d B\n", read_amount);
+
+			printf("PACKET %d \n Received: %d B\n",index-2, read_amount);
 			free(data_buffer);
-		}
-		if (total_read >= data_size && data_size != 0 && read_amount == 0 && didWrite==false) {
-			didWrite = true;
-			printf("DEBUG: Finished writing to file\n", index, data_size);
-			fptr = fopen(fname, "wb");
-			int ret = fwrite(f_data, sizeof(char), data_size, fptr);
-			fclose(fptr);
 		}
 		if (msg_type == '5') {
 
@@ -248,7 +277,6 @@ int main()
 			}
 			pointer++;
 			msg_len += i ;
-			printf("Print HASH - %s\n",pointer);
 			for (i = 0; i < 16;i++) {
 				crc_str[i] = pointer[i];
 			}
@@ -275,20 +303,22 @@ int main()
 		int t = crc_16((unsigned char*)(msg_no_crc), msg_len);
 		if (t == crc) {
 			send_ack(socketS, buffer_tx, from);
+			total_read += read_amount;
+			index++;
 		}
 		else {
 			printf("WRONG CRC\n");
-			printf("CRC I GOT - %d \t CRC I MADE - %d\n", crc, t);
-			printf("msg_no_crc - %s\t msg_len -%d \n", msg_no_crc,msg_len);
 		}
 		free(msg_no_crc);
-		
-		//Transfer ended
-		
-
-		// Pole alokovano
-		
 		memset(buffer_rx, 0, sizeof buffer_rx);
+
+		if (total_read >= data_size && data_size != 0 && read_amount == 0 && didWrite == false) {
+			didWrite = true;
+			printf("DEBUG: Finished writing to file\n", index, data_size);
+			fptr = fopen(fname, "wb");
+			int ret = fwrite(f_data, sizeof(char), data_size, fptr);
+			fclose(fptr);
+		}
 	}
 	
 	closesocket(socketS);
