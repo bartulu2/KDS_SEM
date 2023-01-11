@@ -16,8 +16,10 @@
 
 #define TARGET_IP	"127.0.0.1"
 
-#define TARGET_PORT 14000
-#define LOCAL_PORT 15001
+#define TARGET_PORT 5555
+#define LOCAL_PORT 8888
+
+#define FAULTY_COM TRUE
 
 
 #define BUFFERS_LEN 1024
@@ -35,7 +37,7 @@ bool recieve_ack(SOCKET socket, char *buffer_rx, sockaddr_in dest ) {
 	int crc = 0;
 	char crc_str[16];
 	char* pointer = NULL;
-	timeout.tv_sec = 10;
+	timeout.tv_sec = 1;
 	timeout.tv_usec = 0;
 	FD_ZERO(&masterfds);
 	FD_SET(socket, &masterfds);
@@ -58,7 +60,7 @@ bool recieve_ack(SOCKET socket, char *buffer_rx, sockaddr_in dest ) {
 			exit(1);
 		}
 		else {
-			pointer = strstr(buffer_rx, "ACK");
+			pointer = buffer_rx;
 			char* msg_no_crc = (char*)calloc(4, sizeof(char));
 			pointer += 4;
 			for (int i = 0; i < 16;i++) {
@@ -75,7 +77,7 @@ bool recieve_ack(SOCKET socket, char *buffer_rx, sockaddr_in dest ) {
 			}
 			else {
 				printf("WRONG CRC\n");
-				return 1;
+				return 2;
 			}
 		}
 	}
@@ -207,15 +209,15 @@ int main()
 	long data_pointer = 0;
 	long bytes_sent = 0;
 	bool cont = true;
-	int iter = 0;
+	int packet_num = 0;
 	while (cont) {
-		iter++;
+		packet_num++;
 		char* data_buffer = (char*)calloc(BUFFERS_LEN - 31, sizeof(char));
 		int bytes_read = fread(data_buffer, sizeof(char), 992, fptr);
 		int max_index = 0;
 		bool isContinue = true;
 
-		snprintf(buffer, BUFFERS_LEN, "ID=%d|%d|", 4, bytes_read);
+		snprintf(buffer, BUFFERS_LEN, "ID=%d|%d|%d|", 4, bytes_read,packet_num);
 		int curr_length = 0;
 		while (buffer[curr_length] != 0) {
 			curr_length++;
@@ -229,10 +231,28 @@ int main()
 			buffer_tx[i] = buffer[i];
 		}
 
-		int sent = sendto(socketS, buffer_tx, curr_length + bytes_read + added - 2, 0, (sockaddr*)&addrDest, sizeof(addrDest));
-		printf("Sending DATA, SIZE: %d bytes\n", bytes_read, buffer_tx);
+		if (FAULTY_COM){
+			if (packet_num % 7 == 0) {
+				int faulty_bit_1 = rand()%bytes_read;
+				int faulty_bit_2 = rand() % bytes_read;
+				char temp = buffer_tx[faulty_bit_1];
+				buffer_tx[faulty_bit_1] = buffer_tx[faulty_bit_2];
+				printf("BIT %d is faulty ----- WARNING\n", faulty_bit_1);
+				sendto(socketS, buffer_tx, curr_length + bytes_read + added - 2, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+				buffer_tx[faulty_bit_1] = temp;
+			}
+			else if(packet_num % 10 == 0) {
+					printf("Packet %d lost ----- WARNING\n", packet_num);
+			}
+			else {
+				int sent = sendto(socketS, buffer_tx, curr_length + bytes_read + added - 2, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+			}
+		}
+		else {
+			int sent = sendto(socketS, buffer_tx, curr_length + bytes_read + added - 2, 0, (sockaddr*)&addrDest, sizeof(addrDest));
+		}
 
-		
+		printf("PACKET %d\n Sending DATA, SIZE: %d bytes\n", packet_num ,bytes_read);
 
 		while (recieve_ack(socketS, buffer_rx, addrDest)) {
 			sendto(socketS, buffer_tx, curr_length + bytes_read + added - 2, 0, (sockaddr*)&addrDest, sizeof(addrDest));
@@ -243,9 +263,6 @@ int main()
 
 		if (bytes_read == 0) {
 			cont = false;
-		}
-		if (iter > 2) {
-			//cont = false;
 		}
 		free(data_buffer);
 	}
@@ -266,8 +283,13 @@ int main()
 		snprintf(buffer_tx, BUFFERS_LEN, "ID=%d|%s", 5, hash.c_str());
 		add_crc(buffer_tx, 0, 0);
 		sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
-		std::cout << "DEBUG: Sending hash of: " << hash << std::endl;
-		std::cout << "DEBUG: BUFFER_TX IS " << buffer_tx << std::endl;
+		std::cout << "Sending HASH: " << hash << std::endl;
+
+		while (recieve_ack(socketS, buffer_rx, addrDest)) {
+			sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
+			printf("Resending HASH");
+		}
+
 	}
 	free(moje_souborove_pole);
 	fclose(pepe_file);
