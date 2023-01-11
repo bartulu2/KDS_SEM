@@ -16,8 +16,8 @@
 
 #define TARGET_IP	"127.0.0.1"
 
-#define TARGET_PORT 5555
-#define LOCAL_PORT 8888
+#define TARGET_PORT 14000
+#define LOCAL_PORT 15001
 
 
 #define BUFFERS_LEN 1024
@@ -32,7 +32,10 @@ void InitWinsock()
 bool recieve_ack(SOCKET socket, char *buffer_rx, sockaddr_in dest ) {
 	fd_set readfds, masterfds;
 	struct timeval timeout;
-	timeout.tv_sec = 1;
+	int crc = 0;
+	char crc_str[16];
+	char* pointer = NULL;
+	timeout.tv_sec = 10;
 	timeout.tv_usec = 0;
 	FD_ZERO(&masterfds);
 	FD_SET(socket, &masterfds);
@@ -44,7 +47,7 @@ bool recieve_ack(SOCKET socket, char *buffer_rx, sockaddr_in dest ) {
 
 	if (select(socket + 1, &readfds, NULL, NULL, &timeout) < 0)
 	{
-		perror("on select");
+		perror("Error in select");
 		exit(1);
 	}
 	if (FD_ISSET(socket, &readfds))
@@ -55,8 +58,25 @@ bool recieve_ack(SOCKET socket, char *buffer_rx, sockaddr_in dest ) {
 			exit(1);
 		}
 		else {
-			printf("Received ACK\n");
-			return 0;
+			pointer = strstr(buffer_rx, "ACK");
+			char* msg_no_crc = (char*)calloc(4, sizeof(char));
+			pointer += 4;
+			for (int i = 0; i < 16;i++) {
+				crc_str[i] = pointer[i];
+			}
+			crc = strtol(crc_str, NULL, 10);
+			for (int i = 0; i < 3; i++) {
+				msg_no_crc[i] = buffer_rx[i];
+			}
+			int t = crc_16((unsigned char*)(msg_no_crc), 3);
+			if (t == crc) {
+				printf("Received ACK\n");
+				return 0;
+			}
+			else {
+				printf("WRONG CRC\n");
+				return 1;
+			}
 		}
 	}
 	else
@@ -120,8 +140,7 @@ int main()
 	// ID=4 DATA
 	// ID=5 HASH
 	// ID=6 STOP
-	//
-	//
+
 	sockaddr_in addrDest;
 	FILE* fptr;
 	addrDest.sin_family = AF_INET;
@@ -149,14 +168,10 @@ int main()
 	strncpy(buffer_tx, buffer, BUFFERS_LEN);
 	printf("Sending START \n");
 	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
-	memset(buffer_tx, 0, sizeof buffer_tx);
-	memset(buffer, 0x00, sizeof buffer);
 
 	while (recieve_ack(socketS, buffer_rx, addrDest)) {
 		sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
 		printf("Resending START \n");
-		memset(buffer_tx, 0, sizeof buffer_tx);
-		memset(buffer, 0x00, sizeof buffer);
 	}
 
 	snprintf(buffer, BUFFERS_LEN, "ID=%d|%s", 2, fname);
@@ -164,14 +179,10 @@ int main()
 	add_crc(buffer, 0, 0);
 	strncpy(buffer_tx, buffer, BUFFERS_LEN);
 	sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
-	memset(buffer_tx, 0, sizeof buffer_tx);
-	memset(buffer, 0x00, sizeof buffer);
 
 	while (recieve_ack(socketS, buffer_rx, addrDest)) {
 		sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
 		printf("Resending file name\n");
-		memset(buffer_tx, 0, sizeof buffer_tx);
-		memset(buffer, 0x00, sizeof buffer);
 	}
 
 	//SEND SIZE OF FILE
@@ -189,12 +200,7 @@ int main()
 	while (recieve_ack(socketS, buffer_rx, addrDest)) {
 		sendto(socketS, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
 		printf("Resending file size %dB\n", file_size);
-		memset(buffer_tx, 0, sizeof buffer_tx);
-		memset(buffer, 0x00, sizeof buffer);
 	}
-
-	memset(buffer_tx, 0, sizeof buffer_tx);
-	memset(buffer, 0x00, sizeof buffer);
 
 	//START SENDING FILE DATA
 
@@ -231,12 +237,7 @@ int main()
 		while (recieve_ack(socketS, buffer_rx, addrDest)) {
 			sendto(socketS, buffer_tx, curr_length + bytes_read + added - 2, 0, (sockaddr*)&addrDest, sizeof(addrDest));
 			printf("Resending DATA, SIZE %d bytes\n", max_index);
-			memset(buffer_tx, 0, sizeof buffer_tx);
-			memset(buffer, 0x00, sizeof buffer);
 		}
-
-		memset(buffer_tx, 0, sizeof buffer_tx);
-		memset(buffer, 0x00, sizeof buffer);
 
 		bytes_sent += bytes_read;
 
