@@ -8,13 +8,15 @@
 #include "ws2tcpip.h"
 #include <string.h>
 #include "..//..//libcrc-master/src/crc16.c"
+
+#define RECEIVER
+
 #define TARGET_IP	"127.0.0.1"
 
+#define TARGET_PORT 14001
+#define LOCAL_PORT 15000
+
 #define BUFFERS_LEN 1024
-
-#define TARGET_PORT 8888
-#define LOCAL_PORT 5555
-
 
 void InitWinsock()
 {
@@ -22,10 +24,31 @@ void InitWinsock()
 	WSAStartup(MAKEWORD(2, 2), &wsaData);
 }
 
-void send_ack(SOCKET socket,char *buffer_tx, sockaddr_in addrDest) {
+
+int add_crc(char* buffer, bool isData, int buffer_len) {
+	char* str = (char*)calloc(1, sizeof(int));
+
+
+	if (!isData) {
+		int temp = crc_16((unsigned char*)(buffer), strlen(buffer));
+		sprintf(str, "|%d", temp);
+		strcat(buffer, str);
+	}
+	else {
+		int temp = crc_16((unsigned char*)(buffer), buffer_len);
+		sprintf(str, "|%d", temp);
+		for (int i = 0; i < sizeof str;i++) {
+			buffer[buffer_len + i] = str[i];
+		}
+	}
+	return sizeof str;
+}
+
+void send_ack(SOCKET socket, char* buffer_tx, sockaddr_in addrDest) {
 	char ack[10];
 	snprintf(ack, 10, "ACK");
 	strncpy(buffer_tx, ack, BUFFERS_LEN);
+	add_crc(buffer_tx, 0, 0);
 	sendto(socket, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
 	printf("ACK SEND\n");
 }
@@ -117,7 +140,7 @@ int main()
 		if (msg_type == '2') {
 			pointer = strstr(buffer_rx, "ID=2");
 			pointer += 5 * sizeof(char);
-			msg_len += 4;
+			msg_len = 4;
 
 			int i = 0;
 			while (pointer[0] != '|') {
@@ -140,7 +163,7 @@ int main()
 
 			pointer = strstr(buffer_rx, "ID=3");
 			pointer += 5 * sizeof(char);
-			msg_len += 4;
+			msg_len = 4;
 
 			int i = 0;
 			while (pointer[0] != '|') {
@@ -172,7 +195,7 @@ int main()
 			pointer = strstr(buffer_rx, "ID=4");
 			char* num_bytes = (char*)calloc(10, sizeof(char));
 			pointer += 5 * sizeof(char);
-			msg_len += 5;
+			msg_len = 5;
 			int i = 0;
 			while (pointer[0] != '|') {
 				num_bytes[i] = pointer[0];
@@ -217,11 +240,19 @@ int main()
 			pointer=pointer + 5*sizeof(char);
 			char* hash = (char*)calloc(64, sizeof(char));
 			int i = 0;
+			msg_len = 5;
 			while (pointer[0] != '|') {
 				hash[i] = pointer[0];
 				i++;
 				pointer += sizeof(char);
 			}
+			pointer++;
+			msg_len += i ;
+			printf("Print HASH - %s\n",pointer);
+			for (i = 0; i < 16;i++) {
+				crc_str[i] = pointer[i];
+			}
+			crc = strtol(crc_str, NULL, 10);
 			std::cout << "DEBUG: Received hash: " << hash << std::endl;
 			FILE* pepe_file = fopen(fname, "rb");
 			char* moje_souborove_pole = (char*)calloc(data_size, sizeof(char));
@@ -246,10 +277,11 @@ int main()
 			send_ack(socketS, buffer_tx, from);
 		}
 		else {
-
+			printf("WRONG CRC\n");
+			printf("CRC I GOT - %d \t CRC I MADE - %d\n", crc, t);
+			printf("msg_no_crc - %s\t msg_len -%d \n", msg_no_crc,msg_len);
 		}
 		free(msg_no_crc);
-		msg_len = 0;
 		
 		//Transfer ended
 		
