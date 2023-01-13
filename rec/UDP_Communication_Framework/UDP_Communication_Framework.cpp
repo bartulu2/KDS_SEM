@@ -19,38 +19,45 @@
 #define FAULTY_COM TRUE
 
 #define BUFFERS_LEN 1024
-
+#define DATA_SIZE 950
+#define OPT_VAL_SIZE 34
 void InitWinsock()
 {
 	WSADATA wsaData;
 	WSAStartup(MAKEWORD(2, 2), &wsaData);
 }
+typedef struct {
+	int id;
+	int data_num;
+	int optional_int;
+	char optional_val[OPT_VAL_SIZE];
+	char data[DATA_SIZE];
+	int crc;
 
 
-int add_crc(char* buffer, bool isData, int buffer_len) {
-	char* str = (char*)calloc(1, sizeof(int));
-
-
-	if (!isData) {
-		int temp = crc_16((unsigned char*)(buffer), strlen(buffer));
-		sprintf(str, "|%d", temp);
-		strcat(buffer, str);
+}message;
+void fillMsg(message* msg, int id, int data_num, int optional_int, char* opt_val, char* data) {
+	char* pointer = (char*)msg;
+	memset(msg, 0x00, sizeof(message));
+	msg->id = id;
+	msg->data_num = data_num;
+	msg->optional_int = optional_int;
+	pointer += 3 * sizeof(int);
+	if (opt_val != NULL) {
+		memcpy(pointer, opt_val, OPT_VAL_SIZE);
 	}
-	else {
-		int temp = crc_16((unsigned char*)(buffer), buffer_len);
-		sprintf(str, "|%d", temp);
-		for (int i = 0; i < sizeof str;i++) {
-			buffer[buffer_len + i] = str[i];
-		}
+	pointer += OPT_VAL_SIZE;
+	if (data != NULL) {
+		memcpy(pointer, data, optional_int);
 	}
-	return sizeof str;
+	msg->crc = crc_16((unsigned char*)msg, sizeof(message) - sizeof(int));
+
 }
-
-void send_ack(SOCKET socket, char* buffer_tx, sockaddr_in addrDest) {
-	char ack[10];
-	snprintf(ack, 10, "ACK");
-	strncpy(buffer_tx, ack, BUFFERS_LEN);
-	add_crc(buffer_tx, 0, 0);
+void send_ack(SOCKET socket, char* buffer_tx, sockaddr_in addrDest, message* msg) {
+	char* pointer = (char*)msg;
+	memset(buffer_tx, 0x00, sizeof(message));
+	memcpy(buffer_tx, pointer, sizeof(message));
+	
 	if (FAULTY_COM) {
 		int fault_error = rand() % 10;
 		int fault_lost = rand() % 15;
@@ -58,24 +65,57 @@ void send_ack(SOCKET socket, char* buffer_tx, sockaddr_in addrDest) {
 			int faulty_bit_1 = rand() % 3;
 			int faulty_bit_2 = rand() % 3;
 			buffer_tx[faulty_bit_1] = buffer_tx[faulty_bit_2];
-			printf("Faulty ACK send ----- WARNING\n", faulty_bit_1);
-			printf("ACK LOOKS LIKE THIS>>> %s\n", buffer_tx);
-			sendto(socket, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
+			//printf("Faulty ACK send ----- WARNING\n", faulty_bit_1);
+			//printf("ACK LOOKS LIKE THIS>>> %s\n", buffer_tx);
+			sendto(socket, buffer_tx, sizeof(message), 0, (sockaddr*)&addrDest, sizeof(addrDest));
 		}
 		else if (!fault_lost) {
-			printf("ACK lost ----- WARNING\n");
+			//printf("ACK lost ----- WARNING\n");
 		}
 		else {
-			sendto(socket, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
-			printf("ACK SEND\n");
+			sendto(socket, buffer_tx, sizeof(message), 0, (sockaddr*)&addrDest, sizeof(addrDest));
+			//printf("ACK SEND\n");
 		}
 	}else{
-		sendto(socket, buffer_tx, strlen(buffer_tx), 0, (sockaddr*)&addrDest, sizeof(addrDest));
-		printf("ACK SEND\n");
+		int num_sent = sendto(socket, buffer_tx, sizeof(message), 0, (sockaddr*)&addrDest, sizeof(addrDest));
+		std::cout << "DEBUG: SENDING ACK" << " ID: " << msg->id << " DATA_NUM: " << msg->data_num <<  std::endl;
 	}
+	memset(buffer_tx, 0x00, sizeof buffer_tx);
 }
 
 
+void recMsg(char buffer[], message* msg) {
+	char* msg_pointer = (char*)msg;
+	char* buf_pointer = buffer;
+	// ADD ID
+	memcpy(msg_pointer, buf_pointer, sizeof(int));
+	msg_pointer += sizeof(int);
+	buf_pointer += sizeof(int);
+
+	// ADD DATA_NUM
+	memcpy(msg_pointer, buf_pointer, sizeof(int));
+	msg_pointer += sizeof(int);
+	buf_pointer += sizeof(int);
+	
+
+	//ADD OPTIONAL_INT
+	memcpy(msg_pointer, buf_pointer, sizeof(int));
+	msg_pointer += sizeof(int);
+	buf_pointer += sizeof(int);
+	//ADD OPTIONAL_VAL
+	memcpy(msg_pointer, buf_pointer, sizeof(char)*OPT_VAL_SIZE);
+	msg_pointer += sizeof(char) * OPT_VAL_SIZE;
+	buf_pointer += sizeof(char) * OPT_VAL_SIZE;
+
+	// ADD DATA
+	memcpy(msg_pointer, buf_pointer, sizeof(char) * DATA_SIZE);
+	msg_pointer += sizeof(char) * DATA_SIZE;
+	buf_pointer += sizeof(char) * DATA_SIZE;
+
+	// ADD CRC
+	memcpy(msg_pointer, buf_pointer, sizeof(int));
+
+}
 //**********************************************************************
 int main()
 {
@@ -91,233 +131,166 @@ int main()
 	local.sin_port = htons(LOCAL_PORT);
 	local.sin_addr.s_addr = INADDR_ANY;
 
-	socketS = socket(AF_INET, SOCK_DGRAM, 0);
+	socketS = socket(AF_INET, SOCK_DGRAM,0);
 	if (bind(socketS, (sockaddr*)&local, sizeof(local)) != 0){
 		printf("Binding error!\n");
 	    getchar(); //wait for press Enter
 		return 1;
 	}
 	//**********************************************************************
-	char buffer_rx[BUFFERS_LEN];
-	char buffer_tx[BUFFERS_LEN];
+	char buffer_rx[BUFFERS_LEN *2];
+	char buffer_tx[BUFFERS_LEN *2];
 
 	sockaddr_in addrDest;
 	addrDest.sin_family = AF_INET;
 	addrDest.sin_port = htons(TARGET_PORT);
-
-
+	InetPton(AF_INET, _T(TARGET_IP), &addrDest.sin_addr.s_addr);
+	memset(buffer_tx, 0x00, sizeof buffer_tx);
 	memset(buffer_rx, 0x00, sizeof buffer_rx);
-	printf("Waiting for datagram ...\n");
+
+	std::cout << "DEBUG: WAITING FOR DATA" << std::endl;
 	char fname[100];
-	char crc_str[16];
-	int crc = 0;
-	char *f_data = NULL;
 	FILE* fptr;
-	bool didWrite = 0;
-	int index = 0;
-	long data_size = 0;
-	char size_str[100];
-	int total_read = 0;
-	int read_amount = 0;
+	int read_amount=0, data_size=0, index=0, packet_num=0, total_read = 0;
+	char *f_data = NULL;
+	
 	bool com_started = false;
-	char msg_type = '0';
-	int msg_len = 0;
+	bool name_sent = false;
+	bool datasize_sent = false;
 	memset(fname, 0x00, sizeof fname);
+	message* send = (message*)malloc(sizeof(message));
 	while (1) {
 		if (recvfrom(socketS, buffer_rx, 1024, 0, (sockaddr*)&from, &fromlen) == SOCKET_ERROR) {
 			printf("Socket error! %d\n", WSAGetLastError());
 			getchar();
 		}
 		
-		else {
-			msg_type = buffer_rx[3];
-		}
 		char* pointer = NULL;
 		//printf("MSG type %c\n", msg_type);
 
-		// Waits for start msg
-		if (com_started != true && msg_type != '1') {
-			printf("Recieved msg without start\n");
+		message* msg = (message*)malloc(sizeof(message));
+		// TODO: Fill msg
+		recMsg(buffer_rx, msg);
+		//std::cout << "DEBUG: RECEIVED MESSAGE, ID: " << msg->id << " DATA_NUM: " << msg->data_num << " OPT_VAL: " << msg->optional_val << " CRC: " << msg->crc << std::endl;
+		int control_crc = crc_16((unsigned char*)msg, sizeof(message) - sizeof(int));
+		if (!(control_crc == msg->crc)) {
+			std::cout << "DEBUG: CRC ARE NOT IDENTICAL, SKIP" << std::endl;
 			continue;
 		}
-		else {
 
+
+		//CRC IS CORRECT, DECOMPOSE MSG
+
+		// Checks for necessary messages
+		if (com_started != true && msg->id != 1) {
+			std::cout << "DEBUG: MESSAGE RECEIVED, BUT EXPECTING START, SKIP" << std::endl;
+			continue;
+		}
+		else if (com_started == true && msg->id == 1){
+			fillMsg(send, 1, packet_num, 0, NULL, NULL);
+			send_ack(socketS, buffer_tx, addrDest,send);
+			continue;
+		}
+		else if (!name_sent && msg->id != 2 && com_started) {
+			std::cout << "DEBUG: MESSAGE RECEIVED, BUT EXPECTING FILE NAME, SKIP" << std::endl;
+			continue;
+		}
+		else if (com_started == true && msg->id == 2 && name_sent==true) {
+			fillMsg(send, 2, packet_num, 0, NULL, NULL);
+			send_ack(socketS, buffer_tx, addrDest,send);
+			continue;
+		}
+		else if (!datasize_sent && msg->id != 3 && com_started && name_sent) {
+			std::cout << "DEBUG: MESSAGE RECEIVED, BUT EXPECTING FILE SIZE, SKIP" << std::endl;
+			continue;
+		}
+		else if (com_started == true && msg->id == 3 && name_sent == true && datasize_sent==true) {
+			fillMsg(send, 3, packet_num, 0, NULL, NULL);
+			send_ack(socketS, buffer_tx, addrDest,send);
+			continue;
 		}
 
-		//Fetch start msg
-		if (msg_type == '1') {
+		switch (msg->id) {
+
+		case 1:
+			std::cout << "DEBUG: START RECEIVED, BEGIN COMMUNICATION" << std::endl;
+			fillMsg(send,1, 0, 0, NULL, NULL);
+			send_ack(socketS, buffer_tx, addrDest,send);
 			com_started = true;
-			pointer = strstr(buffer_rx, "ID=1");
-			pointer += 5 * sizeof(char);
-			msg_len = 4;
-
-			for (int i = 0; i < 16;i++) {
-				crc_str[i] = pointer[i];
+			break;
+		case 2:
+			name_sent = true;
+			memcpy(fname, msg->optional_val, OPT_VAL_SIZE);
+			fillMsg(send, 2, 0, 0, NULL, NULL);
+			send_ack(socketS, buffer_tx, addrDest,send);
+			std::cout << "DEBUG: RECEIVED FILE NAME: " << msg->optional_val << std::endl;
+			break;
+		case 3:
+			datasize_sent = true;
+			fillMsg(send, 3, 0, 0, NULL, NULL);
+			send_ack(socketS, buffer_tx, addrDest,send);
+			std::cout << "DEBUG: RECEIVED FILE SIZE: " << msg->data_num << std::endl;
+			data_size = msg->data_num;
+			f_data = (char*)malloc(data_size * sizeof(char));
+			break;
+		case 4:
+			pointer = f_data;
+			pointer += total_read * sizeof(char);
+			
+			//std::cout<< " MY PACKET_NUM: " << packet_num <<" REC: " << msg->data_num << std::endl;
+			if (packet_num == msg->data_num) {
+				std::cout << "DEBUG: RECEIVED DATA OF NUMBER: " << msg->data_num << " OF SIZE : " << msg->optional_int << std::endl;
+				fillMsg(send, 4, packet_num, 0, NULL, NULL);
+				send_ack(socketS, buffer_tx, addrDest,send);
+				memcpy(pointer, msg->data, sizeof(char) * msg->optional_int);
+				total_read += msg->optional_int;
+				packet_num++;
 			}
-			crc = strtol(crc_str, NULL, 10);
-			printf("COM STARTED\n");
-		}
-
-		//Fetch name of file
-		if (msg_type == '2') {
-			pointer = strstr(buffer_rx, "ID=2");
-			pointer += 5 * sizeof(char);
-			msg_len = 4;
-
-			int i = 0;
-			while (pointer[0] != '|') {
-				fname[i] = pointer[0];
-				i++;
-				pointer += sizeof(char);
+			
+			else {
+				std::cout << "DEBUG: ALREADY RECEIVED THIS DATA PACKET, SKIP. PACKET_NUM: "<<packet_num << " MSG NUM: " << msg->data_num << std::endl;
+				if (msg->data_num <= packet_num){
+					send->data_num = msg->data_num;
+					send_ack(socketS, buffer_tx, addrDest,send);
+				}
 			}
-			msg_len += i + 1;
-			printf("FILENAME: %s\n", fname);
 
-			pointer += sizeof(char);
-			for (int i = 0; i < 16;i++) {
-				crc_str[i] = pointer[i];
-			}
-			crc = strtol(crc_str, NULL, 10);
-		}
+			break;
+		case 5:
+			std::cout << "TOTAL READ: " << total_read << " DATA_SIZE: " << data_size << std::endl;
+			if (total_read < data_size) {
+				std::cout << "DEBUG: RECEIVED HASH, BUT DID NOT RECEIVE ALL FILE DATA" << std::endl;
+				
 
-		//Fetch size of file and allocate memory
-		if (msg_type == '3') {
-
-			pointer = strstr(buffer_rx, "ID=3");
-			pointer += 5 * sizeof(char);
-			msg_len = 4;
-
-			int i = 0;
-			while (pointer[0] != '|') {
-				size_str[i] = pointer[0];
-				i++;
-				pointer += sizeof(char);
-			}
-			msg_len += i + 1;
-			data_size = strtol(size_str, NULL, 10);
-			printf("DATA_SIZE: %d\n", data_size);
-			pointer += sizeof(char);
-
-			for (i = 0; i < 16;i++) {
-				crc_str[i] = pointer[i];
-			}
-			crc = strtol(crc_str, NULL, 10);
-
-			f_data = (char*)calloc(data_size + 5, sizeof(char));
-			memset(f_data, 0x00, data_size * sizeof(char));
-			if (f_data == NULL) {
-				printf("ERROR: cannot allocate memory.\n");
-				exit(1);
-			}
-		}
-
-		//Fetch data and save it to file_buffer
-		if (msg_type == '4') {
-
-			pointer = strstr(buffer_rx, "ID=4");
-			char* num_bytes = (char*)calloc(10, sizeof(char));
-			char* num_msg = (char*)calloc(10, sizeof(char));
-			pointer += 5 * sizeof(char);
-			msg_len = 5;
-			int i = 0;
-			while (pointer[0] != '|') {
-				num_bytes[i] = pointer[0];
-				i++;
-				pointer += sizeof(char);
-			}
-			msg_len += i + 1;
-
-			read_amount = atoi(num_bytes);
-			char* data_buffer = (char*)calloc(read_amount + 2, sizeof(char));
-			pointer += sizeof(char);
-
-			i = 0;
-			while (pointer[0] != '|') {
-				num_msg[i] = pointer[0];
-				i++;
-				pointer += sizeof(char);
-			}
-			msg_len += i + 1;
-			pointer++;
-
-			int msg_num = atoi(num_msg);	
-			if (msg_num != (index - 2)) {
-				send_ack(socketS, buffer_tx, from);
-				continue;
-			}
-			int bytes_read = 0;
-			for (int i = 0;i < read_amount;i++) {
-				bytes_read++;
-				f_data[i + total_read] = pointer[0];
-				data_buffer[i] = pointer[0];
-				pointer++;
-
-			}
-			pointer++;
-			msg_len += bytes_read;
-			for (i = 0; i < 16;i++) {
-				crc_str[i] = pointer[i];
-			}
-			crc = strtol(crc_str, NULL, 10);
-
-			printf("PACKET %d \n Received: %d B\n",index-2, read_amount);
-			free(data_buffer);
-		}
-		if (msg_type == '5') {
-
-			char* pointer = strstr(buffer_rx, "ID=5");
-			pointer=pointer + 5*sizeof(char);
-			char* hash = (char*)calloc(64, sizeof(char));
-			int i = 0;
-			msg_len = 5;
-			while (pointer[0] != '|') {
-				hash[i] = pointer[0];
-				i++;
-				pointer += sizeof(char);
-			}
-			pointer++;
-			msg_len += i ;
-			for (i = 0; i < 16;i++) {
-				crc_str[i] = pointer[i];
-			}
-			crc = strtol(crc_str, NULL, 10);
-			std::cout << "DEBUG: Received hash: " << hash << std::endl;
-			FILE* pepe_file = fopen(fname, "rb");
-			char* moje_souborove_pole = (char*)calloc(data_size, sizeof(char));
-			int byte_read = fread(moje_souborove_pole, sizeof(char), data_size, pepe_file);
-			if (byte_read != data_size) {
-				printf("Cannot read file, bye.\n");
-				std::cout << byte_read << " " << data_size << std::endl;
 			}
 			else {
-				std::string vysledek = md5(std::string(f_data, data_size));
-				std::cout << "DEBUG: Computed hash: " << vysledek << std::endl;
+
+				fptr = fopen(fname, "wb");
+				std::string hash = md5(std::string(f_data, total_read));
+				std::cout << "HASH IS " << hash << std::endl;
+				if (std::strcmp(hash.c_str(), msg->optional_val) == 0) {
+					fillMsg(send, 5, 0, 0, NULL, NULL);
+					send_ack(socketS, buffer_tx, addrDest,send);
+					std::cout << "DEBUG: HASHES ARE SAME, WRITING TO FILE" << std::endl;
+					if (fptr != NULL) {
+						fwrite(f_data, sizeof(char), data_size, fptr);
+
+					}
+					else {
+						std::cout << "POINTER IS NULL" << std::endl;
+					}
+					
+				}
+				else {
+					std::cout << "DEBUGL: HASHES ARE NOT SAME, SKIP" << std::endl;
+				}
 			}
-		}
+			break;
+		default:
+			std::cout << "DEBUG: RECEIVED UNDEFINED MESSAGE TYPE, SKIP" << std::endl;
+			break;
 
-		//CRC control and ACK 
-		char* msg_no_crc = (char*)calloc(msg_len, sizeof(char));
-		for (int i = 0; i < msg_len; i++) {
-			msg_no_crc[i] = buffer_rx[i];
-		}
-		int t = crc_16((unsigned char*)(msg_no_crc), msg_len);
-		if (t == crc) {
-			send_ack(socketS, buffer_tx, from);
-			total_read += read_amount;
-			index++;
-		}
-		else {
-			printf("WRONG CRC\n");
-		}
-		free(msg_no_crc);
-		memset(buffer_rx, 0, sizeof buffer_rx);
 
-		if (total_read >= data_size && data_size != 0 && read_amount == 0 && didWrite == false) {
-			didWrite = true;
-			printf("DEBUG: Finished writing to file\n", index, data_size);
-			fptr = fopen(fname, "wb");
-			int ret = fwrite(f_data, sizeof(char), data_size, fptr);
-			fclose(fptr);
 		}
 	}
 	
